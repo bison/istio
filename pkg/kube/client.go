@@ -40,10 +40,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
-	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/metadata"
 	metadatafake "k8s.io/client-go/metadata/fake"
@@ -57,6 +54,10 @@ import (
 	serviceapisclient "sigs.k8s.io/service-apis/pkg/client/clientset/versioned"
 	serviceapisfake "sigs.k8s.io/service-apis/pkg/client/clientset/versioned/fake"
 	serviceapisinformer "sigs.k8s.io/service-apis/pkg/client/informers/externalversions"
+
+	kubeinformers "github.com/maistra/xns-informer/pkg/generated/kube"
+	xnsinformers "github.com/maistra/xns-informer/pkg/informers"
+	xnsinformerstesting "github.com/maistra/xns-informer/pkg/testing"
 
 	"istio.io/api/label"
 	istioclient "istio.io/client-go/pkg/clientset/versioned"
@@ -104,7 +105,7 @@ type Client interface {
 	ServiceApis() serviceapisclient.Interface
 
 	// KubeInformer returns an informer for core kube client
-	KubeInformer() informers.SharedInformerFactory
+	KubeInformer() kubeinformers.SharedInformerFactory
 
 	// DynamicInformer returns an informer for dynamic client
 	DynamicInformer() dynamicinformer.DynamicSharedInformerFactory
@@ -185,19 +186,40 @@ const resyncInterval = 0
 // NewFakeClient creates a new, fake, client
 func NewFakeClient(objects ...runtime.Object) Client {
 	var c client
-	c.Interface = fake.NewSimpleClientset(objects...)
-	c.kube = c.Interface
-	c.kubeInformer = informers.NewSharedInformerFactory(c.Interface, resyncInterval)
+	var err error
 
 	s := runtime.NewScheme()
-	if err := metav1.AddMetaToScheme(s); err != nil {
+	for gvk := range scheme.Scheme.AllKnownTypes() {
+		obj, err := scheme.Scheme.New(gvk)
+		if err != nil {
+			panic(err.Error())
+		}
+
+		s.AddKnownTypeWithName(gvk, obj)
+	}
+
+	c.Interface, c.dynamic, err = xnsinformerstesting.NewFakeClients(s, objects...)
+	if err != nil {
 		panic(err.Error())
 	}
+
+	c.kube = c.Interface
+
+	c.xnsInformerFactory, err = xnsinformers.NewSharedInformerFactory(
+		c.dynamic,
+		resyncInterval,
+		[]string{metav1.NamespaceAll}, // TODO: Pass namespaces.
+	)
+
+	if err != nil {
+		panic(err.Error())
+	}
+
+	c.kubeInformer = kubeinformers.NewSharedInformerFactory(c.xnsInformerFactory)
 
 	c.metadata = metadatafake.NewSimpleMetadataClient(s)
 	c.metadataInformer = metadatainformer.NewSharedInformerFactory(c.metadata, resyncInterval)
 
-	c.dynamic = dynamicfake.NewSimpleDynamicClient(s)
 	c.dynamicInformer = dynamicinformer.NewDynamicSharedInformerFactory(c.dynamic, resyncInterval)
 
 	c.istio = istiofake.NewSimpleClientset()
@@ -222,11 +244,13 @@ type client struct {
 
 	config *rest.Config
 
+	xnsInformerFactory xnsinformers.SharedInformerFactory
+
 	extSet        kubeExtClient.Interface
 	versionClient discovery.ServerVersionInterface
 
 	kube         kubernetes.Interface
-	kubeInformer informers.SharedInformerFactory
+	kubeInformer kubeinformers.SharedInformerFactory
 
 	dynamic         dynamic.Interface
 	dynamicInformer dynamicinformer.DynamicSharedInformerFactory
@@ -264,7 +288,6 @@ func newClientInternal(clientFactory util.Factory, revision string) (*client, er
 	if err != nil {
 		return nil, err
 	}
-	c.kubeInformer = informers.NewSharedInformerFactory(c.Interface, resyncInterval)
 
 	c.metadata, err = metadata.NewForConfig(c.config)
 	if err != nil {
@@ -277,6 +300,16 @@ func newClientInternal(clientFactory util.Factory, revision string) (*client, er
 		return nil, err
 	}
 	c.dynamicInformer = dynamicinformer.NewDynamicSharedInformerFactory(c.dynamic, resyncInterval)
+
+	c.xnsInformerFactory, err = xnsinformers.NewSharedInformerFactory(
+		c.dynamic,
+		resyncInterval,
+		[]string{metav1.NamespaceAll}, // TODO: Pass namespaces.
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.kubeInformer = kubeinformers.NewSharedInformerFactory(c.xnsInformerFactory)
 
 	c.istio, err = istioclient.NewForConfig(c.config)
 	if err != nil {
@@ -344,7 +377,7 @@ func (c *client) ServiceApis() serviceapisclient.Interface {
 	return c.serviceapis
 }
 
-func (c *client) KubeInformer() informers.SharedInformerFactory {
+func (c *client) KubeInformer() kubeinformers.SharedInformerFactory {
 	return c.kubeInformer
 }
 
@@ -367,12 +400,12 @@ func (c *client) ServiceApisInformer() serviceapisinformer.SharedInformerFactory
 // RunAndWait starts all informers and waits for their caches to sync.
 // Warning: this must be called AFTER .Informer() is called, which will register the informer.
 func (c *client) RunAndWait(stop <-chan struct{}) {
-	c.kubeInformer.Start(stop)
+	c.xnsInformerFactory.Start(stop)
 	c.dynamicInformer.Start(stop)
 	c.metadataInformer.Start(stop)
 	c.istioInformer.Start(stop)
 	c.serviceapisInformers.Start(stop)
-	c.kubeInformer.WaitForCacheSync(stop)
+	c.xnsInformerFactory.WaitForCacheSync(stop)
 	c.dynamicInformer.WaitForCacheSync(stop)
 	c.metadataInformer.WaitForCacheSync(stop)
 	c.istioInformer.WaitForCacheSync(stop)

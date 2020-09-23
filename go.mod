@@ -58,6 +58,7 @@ require (
 	github.com/kr/pretty v0.2.1
 	github.com/kylelemons/godebug v1.1.0
 	github.com/lestrrat-go/jwx v1.0.4
+	github.com/maistra/xns-informer v0.0.0-20200926112138-e8713a2e37ee
 	github.com/mattn/go-isatty v0.0.12
 	github.com/mholt/archiver/v3 v3.3.0
 	github.com/miekg/dns v1.1.31
@@ -102,11 +103,11 @@ require (
 	istio.io/client-go v0.0.0-20200908160912-f99162621a1a
 	istio.io/gogo-genproto v0.0.0-20200908160912-66171252e3db
 	istio.io/pkg v0.0.0-20200922180714-670b76a68558
-	k8s.io/api v0.19.1
+	k8s.io/api v0.19.2
 	k8s.io/apiextensions-apiserver v0.19.1
-	k8s.io/apimachinery v0.19.1
+	k8s.io/apimachinery v0.19.2
 	k8s.io/cli-runtime v0.19.1
-	k8s.io/client-go v0.19.1
+	k8s.io/client-go v0.19.2
 	k8s.io/kubectl v0.19.1
 	k8s.io/utils v0.0.0-20200821003339-5e75c0163111
 	sigs.k8s.io/controller-runtime v0.6.2
